@@ -45,7 +45,7 @@ func Worker(mapf func(string, string) []KeyValue,
 		case REDUCE:
 			doReduce(reducef, reply)
 		case WAIT:
-			time.Sleep(time.Second)
+			time.Sleep(time.Microsecond)
 		case EXIT:
 			os.Exit(0)
 		}
@@ -113,7 +113,7 @@ func doMap(mapf func(string, string) []KeyValue, reply AskTaskReply) {
 	}
 	file.Close()
 	kva := mapf(Map_file_name, string(content))
-	fmt.Println(kva) // debug
+	// fmt.Println(kva) // debug
 
 	err = writeMapOut(kva, reply) // 写出map的结果到临时的中间文件
 	if err != nil {
@@ -168,6 +168,7 @@ func doReduce(reducef func(string, []string) string, reply AskTaskReply) {
 	// 读取对应reduce_id的一系列输入文件
 	reduce_file_names := reply.Reduce_task_files
 	kva := []KeyValue{}
+
 	for _, reduce_file_name := range reduce_file_names {
 		reduce_file, err := os.Open(reduce_file_name)
 		if err != nil {
@@ -181,6 +182,7 @@ func doReduce(reducef func(string, []string) string, reply AskTaskReply) {
 			}
 			kva = append(kva, kv)
 		}
+		reduce_file.Close()
 	}
 
 	// 排序map的输出结果

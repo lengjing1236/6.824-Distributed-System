@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"sync"
 )
 
 type TaskType int
@@ -34,12 +35,16 @@ type Coordinator struct {
 	Reduce_states       []TaskState
 	map_task_id         int
 	reduce_task_id      int
+	mu                  sync.Mutex
 }
 
 // Your code here -- RPC handlers for the worker to call.
 
 // the handler that respond to the worker's ask for the task
 func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.map_task_id < len(c.Files) {
 		// 填充reply，分配map任务
 		reply.Task_type = MAP
@@ -48,8 +53,8 @@ func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 		reply.NReduce = c.NReduce
 
 		c.Map_states[c.map_task_id] = IN_PROCESS // 更新map task 的状态
-
 		c.map_task_id++
+		return nil
 	}
 
 	for _, state := range c.Map_states {
@@ -66,17 +71,27 @@ func (c *Coordinator) AskTask(args *AskTaskArgs, reply *AskTaskReply) error {
 		reply.Reduce_task_files = c.Reduce_input_fnames[c.reduce_task_id]
 
 		c.reduce_task_id++
+		return nil
 	}
+
+	if c.UnsafeDone() {
+		reply.Task_type = EXIT
+	} else {
+		reply.Task_type = WAIT
+	}
+
 	return nil
 }
 
 func (c *Coordinator) GetTaskResult(args *TaskResult, reply *bool) error {
+	c.mu.Lock()
 	switch args.Task_type {
 	case MAP:
 		c.Map_states[args.Task_id] = COMPLETED
 	case REDUCE:
 		c.Reduce_states[args.Task_id] = COMPLETED
 	}
+	c.mu.Unlock()
 
 	*reply = true
 	return nil
@@ -107,16 +122,21 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	ret := true
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
+	return c.UnsafeDone()
+}
+
+// 不线程安全的检查是否所有整个job已经完成
+func (c *Coordinator) UnsafeDone() bool {
 	for _, state := range c.Reduce_states {
 		if state != COMPLETED {
-			ret = false
-			break
+			return false
 		}
 	}
 
-	return ret
+	return true
 }
 
 // create a Coordinator.
@@ -124,13 +144,14 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{Files: files, NReduce: nReduce, map_task_id: 0, reduce_task_id: 0}
-	fmt.Println(files)
+	// fmt.Println(files)
 	c.Reduce_input_fnames = make([][]string, nReduce)
-	for r, filenames := range c.Reduce_input_fnames {
+	for r := range c.Reduce_input_fnames {
 		for map_id := range files {
-			filenames = append(filenames, fmt.Sprintf("mr-%d-%d", map_id, r))
+			c.Reduce_input_fnames[r] = append(c.Reduce_input_fnames[r], fmt.Sprintf("mr-%d-%d", map_id, r))
 		}
 	}
+	// fmt.Println(c.Reduce_input_fnames)
 
 	c.Map_states = make([]TaskState, len(files))
 	c.Reduce_states = make([]TaskState, nReduce)
