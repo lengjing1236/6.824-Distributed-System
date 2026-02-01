@@ -30,26 +30,42 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
+	identity := RegisterWorker()
+
+	// 不断请求task
 	for {
-		args := AskTaskArgs{}
-		reply := AskTaskReply{}
-		// Your worker implementation here.
+		args := WorkerIdentity{identity.WorkerID}
+		reply := Task{}
+		// 调用rpc请求task
 		ok := call("Coordinator.AskTask", &args, &reply)
 		if !ok {
-			log.Fatal("ask task failed")
+			continue
 		}
 
 		switch reply.Task_type {
 		case MAP:
-			doMap(mapf, reply)
+			doMap(mapf, reply, args)
 		case REDUCE:
-			doReduce(reducef, reply)
+			doReduce(reducef, reply, args)
 		case WAIT:
 			time.Sleep(time.Microsecond)
 		case EXIT:
 			os.Exit(0)
 		}
 	}
+}
+
+// 向coordinator注册worker节点
+func RegisterWorker() WorkerIdentity {
+	for {
+		request := RegisterRequest{}
+		reply := WorkerIdentity{}
+		ok := call("Coordinator.RegisterWorker", &request, &reply)
+		if ok {
+			return reply // 成功注册
+		}
+	}
+
 }
 
 // example function to show how to make an RPC call to the coordinator.
@@ -100,7 +116,7 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	return false
 }
 
-func doMap(mapf func(string, string) []KeyValue, reply AskTaskReply) {
+func doMap(mapf func(string, string) []KeyValue, reply Task, worker WorkerIdentity) {
 	// 读取并用map函数处理输入文件
 	Map_file_name := reply.Map_task_file
 	file, err := os.Open(Map_file_name)
@@ -112,8 +128,7 @@ func doMap(mapf func(string, string) []KeyValue, reply AskTaskReply) {
 		log.Fatalf("cannot read %v", Map_file_name)
 	}
 	file.Close()
-	kva := mapf(Map_file_name, string(content))
-	// fmt.Println(kva) // debug
+	kva := mapf(Map_file_name, string(content)) // 运行应用程序的map函数
 
 	err = writeMapOut(kva, reply) // 写出map的结果到临时的中间文件
 	if err != nil {
@@ -121,17 +136,17 @@ func doMap(mapf func(string, string) []KeyValue, reply AskTaskReply) {
 	}
 
 	// 通知coordinator，此map任务已经完成
-	map_result := TaskResult{MAP, reply.Task_id}
+	map_result := TaskResult{MAP, reply.Task_id, worker.WorkerID}
 	is_result_got := false
 	ok := call("Coordinator.GetTaskResult", &map_result, &is_result_got)
 	if ok {
-		fmt.Printf("is map result got: %v\n", is_result_got)
+		fmt.Printf("is map %v result got: %v\n", reply.Task_id, is_result_got)
 	} else {
 		fmt.Printf("doMap: call GetTaskResult failed\n")
 	}
 }
 
-func writeMapOut(kva []KeyValue, reply AskTaskReply) (e error) {
+func writeMapOut(kva []KeyValue, reply Task) (e error) {
 	// 将map函数得到的结果分成NReduce个桶，写入中间文件
 	// map_result := MapResult{}
 	files := make([]*os.File, reply.NReduce)
@@ -164,7 +179,7 @@ func writeMapOut(kva []KeyValue, reply AskTaskReply) (e error) {
 	return nil
 }
 
-func doReduce(reducef func(string, []string) string, reply AskTaskReply) {
+func doReduce(reducef func(string, []string) string, reply Task, worker WorkerIdentity) {
 	// 读取对应reduce_id的一系列输入文件
 	reduce_file_names := reply.Reduce_task_files
 	kva := []KeyValue{}
@@ -204,7 +219,7 @@ func doReduce(reducef func(string, []string) string, reply AskTaskReply) {
 		for k := i; k < j; k++ {
 			values = append(values, kva[k].Value)
 		}
-		output := reducef(kva[i].Key, values)
+		output := reducef(kva[i].Key, values) // 运行应用程序的reduce函数
 
 		fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
 
@@ -215,11 +230,11 @@ func doReduce(reducef func(string, []string) string, reply AskTaskReply) {
 	os.Rename(ofile.Name(), oname)
 
 	// 通知coordinator 此reduce任务已经完成
-	reduce_result := TaskResult{REDUCE, reply.Task_id}
+	reduce_result := TaskResult{REDUCE, reply.Task_id, worker.WorkerID}
 	is_result_got := false
 	ok := call("Coordinator.GetTaskResult", &reduce_result, &is_result_got)
 	if ok {
-		fmt.Printf("is reduce result got: %v\n", is_result_got)
+		fmt.Printf("is reduce %v result got: %v\n", reply.Task_id, is_result_got)
 	} else {
 		fmt.Printf("doReduce: call GetTaskResult failed\n")
 	}

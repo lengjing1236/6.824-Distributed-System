@@ -25,10 +25,14 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
-type AskTaskArgs struct {
+type RegisterRequest struct {
 }
 
-type AskTaskReply struct {
+type WorkerIdentity struct {
+	WorkerID int
+}
+
+type Task struct {
 	Task_type         TaskType
 	Map_task_file     string
 	Reduce_task_files []string
@@ -39,6 +43,7 @@ type AskTaskReply struct {
 type TaskResult struct {
 	Task_type TaskType
 	Task_id   int
+	WorkerID  int
 }
 
 // Cook up a unique-ish UNIX-domain socket name
